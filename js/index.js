@@ -10,12 +10,13 @@ g.width, g.height;
 g.container, g.renderer, g.scene, g.camera, g.controls;
 g.stats, g.gui;
 
+
+
 g.lightC = [];
 g.lightP = [];
 
 var clock = new THREE.Clock();
-var imagesA = [];
-var imagesB = [];
+var vanim;
 
 function init() {
     // container
@@ -25,16 +26,16 @@ function init() {
     
     // renderer
     g.renderer = new THREE.WebGLRenderer({
-        clearAlpha: 0,
-        clearColor: 0xFFFFFF,
-        antialias: true,
-        //depth: true,
-        preserveDrawingBuffer: true ,
+        antialias: true
     });
 
+    g.renderer.setClearColor(0xFFFFFF, 0.0);
     g.renderer.setSize( g.width, g.height );
+    g.renderer.setBlending( THREE.NormalBlending );
+    g.renderer.setDepthTest( false );
     g.renderer.autoClear = false;
     g.renderer.sortObjects = false;
+    //g.renderer.sortObjects = false;
     g.container.appendChild( g.renderer.domElement );
 
 
@@ -52,7 +53,7 @@ function init() {
         c.CAM_FAR
     );
     g.camera.position.set(0, 0, -3);
-    g.camera.lookAt(new THREE.Vector3());
+    g.camera.lookAt(new THREE.Vector3(0, 0, 0));
 
     g.objectCamera = new THREE.PerspectiveCamera(
         c.CAM_FOV,
@@ -83,22 +84,25 @@ function init() {
     g.depthScene.add(g.depthCamera);
 
     // trackball controls
-    g.controls = new THREE.TrackballControls(g.camera, g.container);
+    g.controls = new THREE.TrackballControls( g.camera);
+
     g.controls.rotateSpeed = 1.0;
     g.controls.zoomSpeed = 1.2;
-    g.controls.panSpeed = 1.0;
-    g.controls.dynamicDampingFactor = 0.3;
-    g.controls.staticMoving = false;
+    g.controls.panSpeed = 0.8;
+
     g.controls.noZoom = false;
     g.controls.noPan = false;
 
-    g.time = 40
+    g.controls.staticMoving = true;
+    g.controls.dynamicDampingFactor = 0.3;
 
+    g.controls.keys = [ 65, 83, 68 ];
 
-    g.scene.fog = new THREE.Fog( 0x000000, c.FOG_NEAR, c.FOG_FAR );
+    g.time = 1;
+
     var colorTex = THREE.ImageUtils.loadTexture("textures/jet.png");
-    var voltex = THREE.ImageUtils.loadTexture("textures/A/out"+g.time+".png");
-    var voltex2 = THREE.ImageUtils.loadTexture("textures/B/out"+g.time+".png");
+    var voltex = THREE.ImageUtils.loadTexture("textures/L/out"+g.time+".png");
+    var voltex2 = THREE.ImageUtils.loadTexture("textures/L/out"+g.time+".png");
     
     voltex.minFilter = voltex.magFilter = THREE.LinearFilter;
     voltex.wrapS = voltex.wrapT = THREE.ClampToEdgeWrapping;
@@ -109,6 +113,10 @@ function init() {
     
     colorTex.minFilter = colorTex.magFilter = THREE.LinearFilter;
     colorTex.wrapS = colorTex.wrapT = THREE.ClampToEdgeWrapping;
+
+    g.rtTexture = new THREE.WebGLRenderTarget( g.width, g.height, { minFilter: THREE.LinearFilter,
+                                                                  magFilter: THREE.NearestFilter,
+                                                                  format: THREE.RGBAFormat } );
     
     var colorTexDim =  new THREE.Vector3(347.0, 18.0, 0.0);
     var SIDESIZE = 100;
@@ -120,12 +128,12 @@ function init() {
     g.uniforms = {
         uCamPos:    { type: "v3", value: g.camera.position },
         uColor:     { type: "v3", value: volcol },
-        uTex:       { type: "t", value: 0, texture: voltex },
-        depthTex:       { type: "t", value: 3, texture: voltex },
+        uTex:       { type: "t", value: voltex },
+        depthTex:   { type: "t", value: g.rtTexture },
         uTexDim:    { type: "v3", value: voltexDim },
-        uTex2:       { type: "t", value: 2, texture: voltex2 },
-        colorTex:   { type: "t", value: 1, texture: colorTex },
-        colorTexDim: { type: "v3", value: colorTexDim },
+        uTex2:      { type: "t", value: voltex2 },
+        colorTex:   { type: "t", value : colorTex },
+        colorTexDim:{ type: "v3", value: colorTexDim },
         uOffset:    { type: "v3", value: g.offset },
         uTMK:       { type: "f", value: 10.0 }
     };
@@ -134,41 +142,76 @@ function init() {
         uniforms:       g.uniforms,
         vertexShader:   loadTextFile("shaders/vol-vs.glsl"),
         fragmentShader: loadTextFile("shaders/vol-fs.glsl"),
-        depthWrite:     false
+        depthWrite:     false,
+        transparent: true
     });
 
     depthShader = new THREE.ShaderMaterial({
         uniforms:       g.uniforms,
         vertexShader:   loadTextFile("shaders/scenevs.glsl"),
         fragmentShader: loadTextFile("shaders/scenefs.glsl"),
-        depthWrite:     false
+        depthWrite:     true, // Need to write the depth so the doublesided portion of the shader works
+        side: THREE.DoubleSide // The object meshes from PYURDME are implicitly double sided
     });
 
     g.cube = new THREE.Mesh(
-        new THREE.CubeGeometry( 1.0, 1.0, 1.0 ),    // must be unit cube
-        shader //new THREE.MeshBasicMaterial( { color: 0x00CCCC } )
+        new THREE.BoxGeometry( 1.0, 1.0, 1.0 ),    // must be unit cube
+        shader//new THREE.MeshBasicMaterial( { color: 0xFF1111, opacity: 0.5, transparent : true } )
     );
-    
+
     g.scene.add(g.cube);
 
+    // Load all the timeseries data
+    colors = []
+    imagesA = []
+    imagesB = []
+
+    for(var i = 0; i< 100; i++)
+    {
+        colors[i] = $.parseJSON(loadTextFile("timeSeries/colors" + i + ".json"));
+        imagesA[i] = THREE.ImageUtils.loadTexture("textures/L/out" + i + ".png");
+        imagesB[i] = THREE.ImageUtils.loadTexture("textures/L/out" + i + ".png");
+    }
+
+    //Load up the mesh from file
+    var loader = new THREE.JSONLoader();
+
+    var modelMeshJSON = loadTextFile('subdomain2.json');
+    //Build the object that will render the SURFACE CONCENTRATIONS
+    var model = loader.parse($.parseJSON(modelMeshJSON));
+
+    var material = new THREE.MeshBasicMaterial({vertexColors: THREE.VertexColors});
+    material.side = THREE.DoubleSide;
+
+    g.nucleusMesh = new THREE.Mesh(model.geometry, material);
+
+    for (var i = 0; i < g.nucleusMesh.geometry.faces.length; i++) {
+        var f  = g.nucleusMesh.geometry.faces[i];
+
+        f.vertexColors[0] = new THREE.Color(colors[g.time][f.a]);
+        f.vertexColors[1] = new THREE.Color(colors[g.time][f.b]);
+        f.vertexColors[2] = new THREE.Color(colors[g.time][f.c]);
+    }
+
+    g.objectScene.add(g.nucleusMesh)
     g.littlecube = new THREE.Mesh(
-        new THREE.CubeGeometry( 0.5, 0.5, 0.5 ),    // must be unit cube
-        new THREE.MeshBasicMaterial( { color : 0x00FF00 } )
+        new THREE.BoxGeometry( 0.5, 0.5, 0.5 ),    // must be unit cube
+        depthShader//new THREE.MeshBasicMaterial( { color : 0x1111FF
+                   //                  } )
     );
 
-    g.objectScene.add(g.littlecube);
-    g.littlecube2 = new THREE.Mesh(
-        new THREE.CubeGeometry( 0.5, 0.5, 0.5 ),    // must be unit cube
-        depthShader //new THREE.MeshBasicMaterial( { color : 0x0000FF } )
-    );
-
-    //g.depthScene.add(g.littlecube2);    
+    var material = new THREE.MeshBasicMaterial({vertexColors: THREE.VertexColors, wireframe:false});
+    material.side = THREE.DoubleSide;
+	
+    var model = loader.parse($.parseJSON(modelMeshJSON));
+    mesh = new THREE.Mesh(model.geometry, depthShader);
+    g.depthScene.add(mesh/*g.littlecube*/)
 
     // insert stats
     g.stats = new Stats();
     g.stats.domElement.style.position = 'absolute';
     g.stats.domElement.style.top = '0px';
-    g.stats.domElement.style.zIndex =100;
+    g.stats.domElement.style.zIndex = 100;
     g.container.appendChild( g.stats.domElement );
     
     // init gui
@@ -180,53 +223,40 @@ function init() {
     $(g.gui.__resize_handle).hide();
 
     // add line
-
-
-
-    for(var i = 0; i< 100; i++)
-    {
-        imagesA[i]=THREE.ImageUtils.loadTexture("textures/A/out"+i+".png");
-        imagesB[i]=THREE.ImageUtils.loadTexture("textures/B/out"+i+".png");
-    }
     
-    
-    g.guiline = g.gui.add(g, "time").min(0.0).max(100.0).step(1).onFinishChange(
+    setInterval(
         (function(){
-            if(g.time ==100)
+            g.time += 1;
+            if(g.time >= 20)
                 g.time = 0;
+
+            console.log(g.time)
+
+            for (var i = 0; i < g.nucleusMesh.geometry.faces.length; i++) {
+                var f  = g.nucleusMesh.geometry.faces[i];
+                
+                f.vertexColors[0].setHex(colors[g.time][f.a]);
+                f.vertexColors[1].setHex(colors[g.time][f.b]);
+                f.vertexColors[2].setHex(colors[g.time][f.c]);
+            }
+
+            g.nucleusMesh.geometry.colorsNeedUpdate = true;
+            
             voltex = imagesA[g.time];
-            g.uniforms.uTex.texture = voltex;
+            voltex2 = imagesB[g.time];
+            g.uniforms.uTex.value = voltex;
             g.uniforms.uTex.needsUpdate = true;
-
-            voltex = imagesB[g.time];
-            g.uniforms.uTex2.texture = voltex;
-            g.uniforms.uTex2.needsUpdate = true;
-            g.time += 1;})
-        );
-
+            g.uniforms.uTex2.value = voltex;
+            g.uniforms.uTex2.needsUpdate = true;}),
+        1000/5 );
 
     window.addEventListener( 'resize', onWindowResize, false );
 }
 
 function animate() 
 {
-    g.time = 0;
-    g.animateTime = setInterval(
-      (function(){
-      if(g.time >= 100)
-      g.time = 0;
-      voltex = imagesA[g.time];
-      voltex2 = imagesB[g.time];
-      g.uniforms.uTex.texture = voltex;
-      g.uniforms.uTex.needsUpdate = true;
-      g.uniforms.uTex2.texture = voltex2;
-      g.uniforms.uTex2.needsUpdate = true;
-      g.time += 1;}),
-      1000/3 ); 
-}
-
-function stop(){
-    clearInterval(g.animateTime);
+    requestAnimationFrame( animate ); 
+    
 }
 
 function onWindowResize(event) {
@@ -237,15 +267,11 @@ function onWindowResize(event) {
 
     g.camera.aspect = g.width / g.height;
     g.camera.updateProjectionMatrix();
-
-    g.controls.screen.width = g.width;
-    g.controls.screen.height = g.height;
-    g.controls.radius = ( g.width + g.height ) / 4;
 }
 
 
 function update() {
-    //animate();
+    animate();
     g.stats.update();
     g.controls.update();
 
@@ -255,9 +281,7 @@ function update() {
     g.depthCamera.rotation.copy( g.camera.rotation );
     g.objectCamera.position.copy( g.camera.position );
     g.objectCamera.rotation.copy( g.camera.rotation );
-    g.renderer.render( g.depthScene, g.depthCamera, g.depthTexture, true );
-    g.uniforms.depthTex.texture = g.depthTexture;
-    //g.uniforms.uTex.texture.needsUpdate = true;
+    g.renderer.render( g.depthScene, g.depthCamera, g.rtTexture, true );
     g.renderer.render( g.objectScene, g.objectCamera );
     g.renderer.render( g.scene, g.camera );
 
@@ -312,3 +336,56 @@ $(function() {
     update();
     mousetrap();
 });
+/*
+    var faceIndices = [ 'a', 'b', 'c', 'd' ];
+
+    var color, f, f2, f3, p, n, vertexIndex,
+
+    radius = 1,
+
+    geometry  = new THREE.IcosahedronGeometry( radius, 1 ),
+    geometry2 = new THREE.IcosahedronGeometry( radius, 1 ),
+    geometry3 = new THREE.IcosahedronGeometry( radius, 1 );
+
+    for ( var i = 0; i < geometry.faces.length; i ++ ) {
+
+	f  = geometry.faces[ i ];
+	f2 = geometry2.faces[ i ];
+	f3 = geometry3.faces[ i ];
+
+	n = ( f instanceof THREE.Face3 ) ? 3 : 4;
+
+	for( var j = 0; j < n; j++ ) {
+
+	    vertexIndex = f[ faceIndices[ j ] ];
+
+	    p = geometry.vertices[ vertexIndex ];
+
+	    color = new THREE.Color( 0xffffff );
+	    color.setHSL( ( p.y / radius + 1 ) / 2, 1.0, 0.5 );
+
+	    f.vertexColors[ j ] = color;
+
+	    color = new THREE.Color( 0xffffff );
+	    color.setHSL( 0.0, ( p.y / radius + 1 ) / 2, 0.5 );
+
+	    f2.vertexColors[ j ] = color;
+
+	    color = new THREE.Color( 0xffffff );
+	    color.setHSL( 0.125 * vertexIndex/geometry.vertices.length, 1.0, 0.5 );
+
+	    f3.vertexColors[ j ] = color;
+
+	}
+
+    }
+
+
+    var materials = [
+	new THREE.MeshLambertMaterial( { color: 0xFF0000, shading: THREE.FlatShading, vertexColors: THREE.VertexColors } ),
+	new THREE.MeshBasicMaterial( { color: 0xFFFFFF, shading: THREE.FlatShading, wireframe: true, transparent: true } )
+    ];
+    group1 = THREE.SceneUtils.createMultiMaterialObject( geometry, materials );
+    //g.scene.add( group1 );
+
+*/
